@@ -1516,6 +1516,8 @@ int dlclose(void* handle)
 	return result;
 }
 
+// dlopen是运行时加载动态库的一个重要方法，当然系统还提供了
+// 运行时加载Bundle的函数，最终也会调用load函数进行动态加载。
 void* dlopen(const char* path, int mode)
 {
     dyld3::ScopedTimer timer(DBG_DYLD_TIMING_DLOPEN, path, mode, 0);

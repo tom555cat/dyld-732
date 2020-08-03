@@ -584,6 +584,8 @@ ImageLoader* ImageLoaderMachO::instantiateMainExecutable(const macho_header* mh,
 
 
 // create image by mapping in a mach-o file
+// 会先进行文件解析，然后根据文件解析得到这个文件是否被压缩过，
+// 根据是否压缩过走不通的初始化逻辑，并把解析结果传入。
 ImageLoader* ImageLoaderMachO::instantiateFromFile(const char* path, int fd, const uint8_t firstPages[], size_t firstPagesSize, uint64_t offsetInFat,
 									uint64_t lenInFat, const struct stat& info, const LinkContext& context)
 {
@@ -592,9 +594,10 @@ ImageLoader* ImageLoaderMachO::instantiateFromFile(const char* path, int fd, con
 	unsigned int libCount;
 	const linkedit_data_command* codeSigCmd;
 	const encryption_info_command* encryptCmd;
+	// mach-o文件解析
 	sniffLoadCommands((const macho_header*)firstPages, path, false, &compressed, &segCount, &libCount, context, &codeSigCmd, &encryptCmd);
 	// instantiate concrete class based on content of load commands
-	if ( compressed ) 
+	if ( compressed )   // 现在的mach-o都是被压缩过的，所以需要走下面的逻辑
 		return ImageLoaderMachOCompressed::instantiateFromFile(path, fd, firstPages, firstPagesSize, offsetInFat, lenInFat, info, segCount, libCount, codeSigCmd, encryptCmd, context);
 	else
 #if SUPPORT_CLASSIC_MACHO
@@ -1185,6 +1188,7 @@ void ImageLoaderMachO::loadCodeSignature(const struct linkedit_data_command* cod
 	}
 }
 
+// 分配第一页(4K)可执行内存，验证签名一致性和动态库是否来自沙盒
 void ImageLoaderMachO::validateFirstPages(const struct linkedit_data_command* codeSigCmd, int fd, const uint8_t *fileData, size_t lenFileData, off_t offsetInFat, const LinkContext& context)
 {
 #if __MAC_OS_X_VERSION_MIN_REQUIRED
@@ -1195,10 +1199,13 @@ void ImageLoaderMachO::validateFirstPages(const struct linkedit_data_command* co
 	}
 #endif
 	if (codeSigCmd != NULL) {
+		// 预分配可执行内存
 		void *fdata = xmmap(NULL, lenFileData, PROT_READ, MAP_SHARED, fd, offsetInFat);
 		if ( fdata == MAP_FAILED ) {
 			int errnoCopy = errno;
 			if ( errnoCopy == EPERM ) {
+				// 动态库和Mach-O的签名一致性校验，传入动态库path，最终调用的是sandbox_check函数，
+				// sandbox_check是一个后台deamon进程sandboxd提供的检测服务。
 				if ( dyld::sandboxBlockedMmap(getPath()) )
 					dyld::throwf("file system sandbox blocked mmap() of '%s'", getPath());
 				else
@@ -1209,6 +1216,7 @@ void ImageLoaderMachO::validateFirstPages(const struct linkedit_data_command* co
 		}
 		if ( memcmp(fdata, fileData, lenFileData) != 0 )
 			dyld::throwf("mmap() page compare failed for '%s'", getPath());
+		// 释放分配的可执行内存
 		munmap(fdata, lenFileData);
 	}
 }

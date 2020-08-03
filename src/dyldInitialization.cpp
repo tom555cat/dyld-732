@@ -113,6 +113,8 @@ static void rebaseDyld(const dyld3::MachOLoaded* dyldMH)
 //  This is code to bootstrap dyld.  This work in normally done for a program by dyld and crt.
 //  In dyld we have to do this manually.
 //
+// 此函数的调用会完成动态库加载的一系列过程，并返回主程序main函数入口，也就是我们App的main函数地址，
+// 也就是我们App的main函数地址，保存在x0寄存器。
 uintptr_t start(const dyld3::MachOLoaded* appsMachHeader, int argc, const char* argv[],
 				const dyld3::MachOLoaded* dyldsMachHeader, uintptr_t* startGlue)
 {
@@ -140,6 +142,8 @@ uintptr_t start(const dyld3::MachOLoaded* appsMachHeader, int argc, const char* 
 	runDyldInitializers(argc, argv, envp, apple);
 #endif
 
+    // 此函数的调用会完成动态库加载的一系列过程，并返回主程序main函数入口，也就是我们App的main函数地址，
+    // 也就是我们App的main函数地址，保存在x0寄存器。
 	// now that we are done bootstrapping dyld, call dyld's main
 	uintptr_t appsSlide = appsMachHeader->getSlide();
 	return dyld::_main((macho_header*)appsMachHeader, appsSlide, argc, argv, envp, apple, startGlue);

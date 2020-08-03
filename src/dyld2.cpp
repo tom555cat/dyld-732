@@ -3154,6 +3154,7 @@ static bool iOSonMacDenied(const char* path)
 #endif
 
 // map in file and instantiate an ImageLoader
+// 进行文件读取和mach-o文件解析，然后调用ImageLoaderMachO::instantiateFromFile
 static ImageLoader* loadPhase6(int fd, const struct stat& stat_buf, const char* path, const LoadContext& context)
 {
 	//dyld::log("%s(%s)\n", __func__ , path);
@@ -3169,6 +3170,7 @@ static ImageLoader* loadPhase6(int fd, const struct stat& stat_buf, const char* 
 	bool shortPage = false;
 	
 	// min mach-o file is 4K
+	// 这里可以看到最小的mach-o文件是4k，会存储最基本的header信息等。
 	if ( fileLength < 4096 ) {
 		if ( pread(fd, firstPages, (size_t)fileLength, 0) != (ssize_t)fileLength )
 			throwf("pread of short file failed: %d", errno);
@@ -3181,6 +3183,7 @@ static ImageLoader* loadPhase6(int fd, const struct stat& stat_buf, const char* 
 	}
 	
 	// if fat wrapper, find usable sub-file
+	// header的一些检查
 	const fat_header* fileStartAsFat = (fat_header*)firstPages;
 	if ( fileStartAsFat->magic == OSSwapBigToHostInt32(FAT_MAGIC) ) {
 		if ( OSSwapBigToHostInt32(fileStartAsFat->nfat_arch) > ((4096 - sizeof(fat_header)) / sizeof(fat_arch)) )
@@ -3203,6 +3206,7 @@ static ImageLoader* loadPhase6(int fd, const struct stat& stat_buf, const char* 
 	if ( isCompatibleMachO(firstPages, path) ) {
 
 		// only MH_BUNDLE, MH_DYLIB, and some MH_EXECUTE can be dynamically loaded
+		// 只接受MH_BUNDLE, MH_DYLIB, and some MH_EXECUTE三种格式。
 		const mach_header* mh = (mach_header*)firstPages;
 		switch ( mh->filetype ) {
 			case MH_EXECUTE:
@@ -3264,6 +3268,7 @@ static ImageLoader* loadPhase6(int fd, const struct stat& stat_buf, const char* 
 		ImageLoader* image = nullptr;
 		{
 			dyld3::ScopedTimer timer(DBG_DYLD_TIMING_MAP_IMAGE, path, 0, 0);
+			// 调用imageLoaderMachO::instantiateFromFile创建ImageLoader
 			image = ImageLoaderMachO::instantiateFromFile(path, fd, firstPagesPtr, headerAndLoadCommandsSize, fileOffset, fileLength, stat_buf, gLinkContext);
 			timer.setData4((uint64_t)image->machHeader());
 		}
@@ -3276,6 +3281,8 @@ static ImageLoader* loadPhase6(int fd, const struct stat& stat_buf, const char* 
 	
 	
 	// throw error about what was found
+	// 是mach-o文件，但是是可执行文件的magicnumber，而不是动态库，则返回error，也就是说通过设置环境
+	// 变量`DYLD_INSERT_LIBRARIES`来加载一个可执行文件是不可行的。
 	switch (*(uint32_t*)firstPages) {
 		case MH_MAGIC:
 		case MH_CIGAM:
@@ -3294,6 +3301,7 @@ static ImageLoader* loadPhase5open(const char* path, const LoadContext& context,
 	//dyld::log("%s(%s, %p)\n", __func__ , path, exceptions);
 
 	// open file (automagically closed when this function exits)
+	// 打开文件 获取文件句柄fd
 	FileOpener file(path);
 		
 	// just return NULL if file not found, but record any other errors
@@ -3311,6 +3319,7 @@ static ImageLoader* loadPhase5open(const char* path, const LoadContext& context,
 	}
 
 	try {
+		// 传入文件句柄给loadPhase6，loadPhase6进行文件读取。
 		return loadPhase6(file.getFileDescriptor(), stat_buf, path, context);
 	}
 	catch (const char* msg) {
@@ -3336,6 +3345,8 @@ static bool isFileRelativePath(const char* path)
 
 
 // try to open file
+// loadPhase5load会先用查找到的路径在之前加载完成的共享动态库中查找image，
+// 如果已经存在则返回，如果不存在则调用loadPhase5stat函数。
 static ImageLoader* loadPhase5load(const char* path, const char* orgPath, const LoadContext& context, unsigned& cacheIndex, std::vector<const char*>* exceptions)
 {
 	//dyld::log("%s(%s, %p)\n", __func__ , path, exceptions);
@@ -3364,6 +3375,7 @@ static ImageLoader* loadPhase5load(const char* path, const char* orgPath, const 
 	bool existsOnDisk;
 	dyld3::SharedCacheFindDylibResults shareCacheResults;
 	shareCacheResults.image = nullptr;
+	// 用查找到的路径在之前加载完成的共享动态库中查找image是否已经加载。
 	if ( dyld3::findInSharedCacheImage(sSharedCacheLoadInfo, pathToFindInCache, &shareCacheResults) ) {
 		// see if this image in the cache was already loaded via a different path
 		for (std::vector<ImageLoader*>::iterator it=sAllImages.begin(); it != sAllImages.end(); ++it) {
@@ -3435,6 +3447,8 @@ static ImageLoader* loadPhase5load(const char* path, const char* orgPath, const 
 	}
 	if ( existsOnDisk ) {
 		// in case image was renamed or found via symlinks, check for inode match
+		// 为了防止动态库改名引起的多次加载，会调用findLoadedImage，用符号链接进行查找image，
+		// 如果还是没有找到，调用loadPhase5open打开文件。
 		ImageLoader* imageLoader = findLoadedImage(statBuf);
 		if ( imageLoader != NULL )
 			return imageLoader;
@@ -3798,6 +3812,7 @@ static ImageLoader* loadPhase1(const char* path, const char* orgPath, const Load
 }
 
 // try root substitutions
+// loadPhase0会遍历环境变量DYLD_ROOT_PATH，生成加载路径，
 static ImageLoader* loadPhase0(const char* path, const char* orgPath, const LoadContext& context, unsigned& cacheIndex, std::vector<const char*>* exceptions)
 {
 	//dyld::log("%s(%s, %p)\n", __func__ , path, exceptions);
@@ -3827,6 +3842,7 @@ static ImageLoader* loadPhase0(const char* path, const char* orgPath, const Load
 #if SUPPORT_ROOT_PATH
 	// handle DYLD_ROOT_PATH which forces absolute paths to use a new root
 	if ( (gLinkContext.rootPaths != NULL) && (path[0] == '/') ) {
+		// 遍历环境变量`DYLD_ROOT_PATH`，生成加载路径
 		for(const char* const* rootPath = gLinkContext.rootPaths; *rootPath != NULL; ++rootPath) {
 			size_t rootLen = strlen(*rootPath);
 			if ( strncmp(path, *rootPath, rootLen) != 0 ) {
@@ -3842,6 +3858,7 @@ static ImageLoader* loadPhase0(const char* path, const char* orgPath, const Load
 #endif
 
 	// try raw path
+	// 使用原路径
 	return loadPhase1(path, orgPath, context, cacheIndex, exceptions);
 }
 
@@ -3859,6 +3876,7 @@ static ImageLoader* loadPhase0(const char* path, const char* orgPath, const Load
 // the path.  Either time, if an image is found, the phases all unwind without checking
 // for other paths.
 //
+// load函数是一系列查找动态库的入口
 ImageLoader* load(const char* path, const LoadContext& context, unsigned& cacheIndex)
 {
 	CRSetCrashLogMessage2(path);
@@ -3868,13 +3886,15 @@ ImageLoader* load(const char* path, const LoadContext& context, unsigned& cacheI
 	//dyld::log("%s(%s)\n", __func__ , path);
 	char realPath[PATH_MAX];
 	// when DYLD_IMAGE_SUFFIX is in used, do a realpath(), otherwise a load of "Foo.framework/Foo" will not match
+	// 如果设置了DYLD_IMAGE_SUFFIX，要用realpath获取绝对地址
 	if ( context.useSearchPaths && ( gLinkContext.imageSuffix != NULL && *gLinkContext.imageSuffix != NULL) ) {
+		// 获取绝对地址
 		if ( realpath(path, realPath) != NULL )
 			path = realPath;
 	}
 	
 	// try all path permutations and check against existing loaded images
-
+	// 一系列的路径搜索、cache查找等
 	ImageLoader* image = loadPhase0(path, orgPath, context, cacheIndex, NULL);
 	if ( image != NULL ) {
 		CRSetCrashLogMessage2(NULL);
@@ -4826,6 +4846,7 @@ static void printAllImages()
 }
 #endif
 
+// 最终是调用image->link来完成链接
 void link(ImageLoader* image, bool forceLazysBound, bool neverUnload, const ImageLoader::RPathChain& loaderRPaths, unsigned cacheIndex)
 {
 	// add to list of known images.  This did not happen at creation time for bundles
@@ -5023,6 +5044,7 @@ static void loadInsertedDylib(const char* path)
 		context.canBePIE			= false;
 		context.origin				= NULL;	// can't use @loader_path with DYLD_INSERT_LIBRARIES
 		context.rpath				= NULL;
+		// 主要是调用load函数来进行动态库的加载
 		load(path, context, cacheIndex);
 	}
 	catch (const char* msg) {
@@ -6105,6 +6127,8 @@ static ClosureMode getPlatformDefaultClosureMode() {
 #endif // __MAC_OS_X_VERSION_MIN_REQUIRED
 }
 
+// dyld 的main函数，主要完成了上下文的建立、初始化必要的参数、解析环境变量、主程序分配
+// imageLoader、映射共享的系统动态库、调用加载依赖的动态库、链接动态库、初始化主程序、查找并返回主程序main函数等。
 //
 // Entry point for dyld.  The kernel loads dyld and jumps to __dyld_start which
 // sets up some registers and call this function.
@@ -6295,6 +6319,8 @@ _main(const macho_header* mainExecutableMH, uintptr_t mainExecutableSlide,
 		gLinkContext.sharedRegionMode = ImageLoader::kDontUseSharedRegion;
 	}
 #endif
+	// 处理环境变量，如果我们在xcode中的`Edit Scheme -> run -> Argument`中添加了DYLD_PRINT_OPTS、
+	// DYLD_PRINT_ENV等参数可在输出中打印相关信息
 	if ( sEnv.DYLD_PRINT_OPTS )
 		printOptions(argv);
 	if ( sEnv.DYLD_PRINT_ENV ) 
@@ -6331,6 +6357,7 @@ _main(const macho_header* mainExecutableMH, uintptr_t mainExecutableSlide,
 	checkSharedRegionDisable((dyld3::MachOLoaded*)mainExecutableMH, mainExecutableSlide);
 	if ( gLinkContext.sharedRegionMode != ImageLoader::kDontUseSharedRegion ) {
 #if TARGET_OS_SIMULATOR
+		// 映射/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64中的动态库
 		if ( sSharedCacheOverrideDir)
 			mapSharedCache();
 #else
@@ -6496,10 +6523,18 @@ reloadAllImages:
 
 		CRSetCrashLogMessage(sLoadingCrashMessage);
 		// instantiate ImageLoader for main executable
+		// 为主程序初始化imageLoader，用于后续的链接等过程，主程序作为dyld的第一个被addimage的镜像，
+		// 所以我们总是能够通过_dyld_get_image_header(0)或者_dyld_get_image_name(0)等，索引到
+		// 第一个image镜像为主程序的相关信息。
 		sMainExecutable = instantiateFromLoadedImage(mainExecutableMH, mainExecutableSlide, sExecPath);
 		gLinkContext.mainExecutable = sMainExecutable;
 		gLinkContext.mainExecutableCodeSigned = hasCodeSignatureLoadCommand(mainExecutableMH);
 
+		
+		// 获取主程序的header、建立上下文、通知dyld的信息给kernel等，其中使用notifyKernelAboutDyld
+		// 通知给kernel dyld的信息。
+		
+		
 #if TARGET_OS_SIMULATOR
 		// check main executable is not too new for this OS
 		{
@@ -6560,6 +6595,9 @@ reloadAllImages:
 				gProcessInfo->dyldPath = strdup(dyldPathBuffer);
 		}
 
+		// 加载环境变量DYLD_INSERT_LIBRARIES中的动态库，这也是很多越狱情况下
+		// CydiaSubstrate不需要修改binary就能加载动态库的原因，越狱情况下可以直接修改app的环境
+		// 变量，从而注入动态库。
 		// load any inserted libraries
 		if	( sEnv.DYLD_INSERT_LIBRARIES != NULL ) {
 			for (const char* const* lib = sEnv.DYLD_INSERT_LIBRARIES; *lib != NULL; ++lib) 
@@ -6578,6 +6616,7 @@ reloadAllImages:
 			sMainExecutable->rebase(gLinkContext, -mainExecutableSlide);
 		}
 #endif
+		// 链接主程序
 		link(sMainExecutable, sEnv.DYLD_BIND_AT_LAUNCH, true, ImageLoader::RPathChain(NULL, NULL), -1);
 		sMainExecutable->setNeverUnloadRecursive();
 		if ( sMainExecutable->forceFlat() ) {
@@ -6591,6 +6630,7 @@ reloadAllImages:
 		if ( sInsertedDylibCount > 0 ) {
 			for(unsigned int i=0; i < sInsertedDylibCount; ++i) {
 				ImageLoader* image = sAllImages[i+1];
+				// 循环链接动态库
 				link(image, sEnv.DYLD_BIND_AT_LAUNCH, true, ImageLoader::RPathChain(NULL, NULL), -1);
 				image->setNeverUnloadRecursive();
 			}
@@ -6676,6 +6716,9 @@ reloadAllImages:
 			initializeMainExecutable(); 
 	#else
 		// run all initializers
+		// 初始化主程序，在这里可以参考runtime的源码，runtime里面注册了dyld的回调通知，会调用
+		// load_images，然后去调用各个类的+load方法等，这也是为何+load会在主程序main函数之前
+		// 执行的根本原因。
 		initializeMainExecutable(); 
 	#endif
 
@@ -6696,6 +6739,8 @@ reloadAllImages:
 		else
 #endif
 		{
+			// 寻找主程序main函数，并作为结果返回，然后上述的汇编文件中会通过br x16来进行
+			// 主程序main函数调用。
 			// find entry point for main executable
 			result = (uintptr_t)sMainExecutable->getEntryFromLC_MAIN();
 			if ( result != 0 ) {

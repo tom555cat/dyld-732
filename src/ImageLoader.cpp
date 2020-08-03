@@ -491,7 +491,11 @@ void ImageLoader::vmAccountingSetSuspended(const LinkContext& context, bool susp
 #endif
 }
 
-
+// recursiveLoadLibraries递归加载所有依赖库
+// recursiveRebase递归修正自己和依赖库的基地址，因为ASLR（上文中已经提到过）的原因，需要根据随机slide修正基地址。
+// recursiveBind对于nolazy的符号进行递归绑定,lazy的符号会在运行时动态绑定。
+// weakBind 弱符号绑定，比如未初始化的全局变量就是弱符号。
+// recursiveGetDOFSections和 registerDOFs递归获取和注册程序的DOF节区，dtrace会用其动态跟踪
 void ImageLoader::link(const LinkContext& context, bool forceLazysBound, bool preflightOnly, bool neverUnload, const RPathChain& loaderRPaths, const char* imagePath)
 {
 	//dyld::log("ImageLoader::link(%s) refCount=%d, neverUnload=%d\n", imagePath, fDlopenReferenceCount, fNeverUnload);
@@ -500,6 +504,7 @@ void ImageLoader::link(const LinkContext& context, bool forceLazysBound, bool pr
 	(*context.setErrorStrings)(0, NULL, NULL, NULL);
 
 	uint64_t t0 = mach_absolute_time();
+	// 递归加载所有依赖库
 	this->recursiveLoadLibraries(context, preflightOnly, loaderRPaths, imagePath);
 	context.notifyBatch(dyld_image_state_dependents_mapped, preflightOnly);
 
@@ -509,19 +514,23 @@ void ImageLoader::link(const LinkContext& context, bool forceLazysBound, bool pr
 
 	uint64_t t1 = mach_absolute_time();
 	context.clearAllDepths();
+	// 更新递归遍历的标志位
 	this->recursiveUpdateDepth(context.imageCount());
 
 	__block uint64_t t2, t3, t4, t5;
 	{
+		// 递归修正自己和依赖库的基地址，因为ASLR的原因，需要根据随机`slide`修正基地址。
 		dyld3::ScopedTimer(DBG_DYLD_TIMING_APPLY_FIXUPS, 0, 0, 0);
 		t2 = mach_absolute_time();
 		this->recursiveRebaseWithAccounting(context);
 		context.notifyBatch(dyld_image_state_rebased, false);
 
+		// 对于`nolazy`的符号进行递归绑定，`lazy`的符号会在运行时动态绑定
 		t3 = mach_absolute_time();
 		if ( !context.linkingMainExecutable )
 			this->recursiveBindWithAccounting(context, forceLazysBound, neverUnload);
 
+		// 弱符号绑定
 		t4 = mach_absolute_time();
 		if ( !context.linkingMainExecutable )
 			this->weakBind(context);
@@ -542,6 +551,7 @@ void ImageLoader::link(const LinkContext& context, bool forceLazysBound, bool pr
         context.notifyBatch(dyld_image_state_bound, false);
 	uint64_t t6 = mach_absolute_time();
 
+	// 递归获取和注册程序的DOF节区，dtrace会用其动态跟踪
 	if ( context.registerDOFs != NULL ) {
 		std::vector<DOFInfo> dofs;
 		this->recursiveGetDOFSections(context, dofs);
@@ -552,6 +562,7 @@ void ImageLoader::link(const LinkContext& context, bool forceLazysBound, bool pr
 	// clear error strings
 	(*context.setErrorStrings)(0, NULL, NULL, NULL);
 
+	// 各个阶段时间统计
 	fgTotalLoadLibrariesTime += t1 - t0;
 	fgTotalRebaseTime += t3 - t2;
 	fgTotalBindTime += t4 - t3;

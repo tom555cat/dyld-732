@@ -100,6 +100,11 @@ ImageLoaderMachOCompressed* ImageLoaderMachOCompressed::instantiateMainExecutabl
 }
 
 // create image by mapping in a mach-o file
+// 主要完成了一下几个工作：
+// 1. 签名验证
+// 2. 沙盒验证
+//（iOS10及以上系统，iOS10以下的系统是不会校验沙盒MainBundle权限的，可以加载沙盒MainBundle以外的动态库，但是它的安全机制靠签名验证来保证）
+// 3.分配可执行内存
 ImageLoaderMachOCompressed* ImageLoaderMachOCompressed::instantiateFromFile(const char* path, int fd, const uint8_t* fileData, size_t lenFileData,
 															uint64_t offsetInFat, uint64_t lenInFat, const struct stat& info, 
 															unsigned int segCount, unsigned int libCount, 
@@ -107,19 +112,24 @@ ImageLoaderMachOCompressed* ImageLoaderMachOCompressed::instantiateFromFile(cons
 															const struct encryption_info_command* encryptCmd, 
 															const LinkContext& context)
 {
+	// 基本初始化
 	ImageLoaderMachOCompressed* image = ImageLoaderMachOCompressed::instantiateStart((macho_header*)fileData, path, segCount, libCount);
 
 	try {
 		// record info about file  
 		image->setFileInfo(info.st_dev, info.st_ino, info.st_mtime);
 
+		// 分配可执行内存之前进行代码签名验证，此处验证并不会验证动态库的签名和主程序的签名是否相同，
+		// 下面会进行解释
 		// if this image is code signed, let kernel validate signature before mapping any pages from image
 		image->loadCodeSignature(codeSigCmd, fd, offsetInFat, context);
 		
+		// 预分配第一页(4K)可执行内存 mmap会验证动态库的沙盒权限和签名
 		// Validate that first data we read with pread actually matches with code signature
 		image->validateFirstPages(codeSigCmd, fd, fileData, lenFileData, offsetInFat, context);
 
 		// mmap segments
+		// 映射segment可执行内存
 		image->mapSegments(fd, offsetInFat, lenInFat, info.st_size, context);
 
 		// if framework is FairPlay encrypted, register with kernel
